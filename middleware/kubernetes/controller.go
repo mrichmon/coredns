@@ -28,10 +28,12 @@ type dnsController struct {
 
 	endpController *framework.Controller
 	svcController  *framework.Controller
+	podController  *framework.Controller
 	nsController   *framework.Controller
 
-	svcLister  cache.StoreToServiceLister
 	endpLister cache.StoreToEndpointsLister
+	svcLister  cache.StoreToServiceLister
+	podLister  cache.StoreToServiceLister
 	nsLister   util.StoreToNamespaceLister
 
 	// stopLock is used to enforce only a single call to Stop is active.
@@ -64,6 +66,13 @@ func newdnsController(kubeClient *client.Client, resyncPeriod time.Duration, lse
 		},
 		&api.Service{}, resyncPeriod, framework.ResourceEventHandlerFuncs{})
 
+	dns.podLister.Store, dns.podController = framework.NewInformer(
+		&cache.ListWatch{
+			ListFunc:  serviceListFunc(dns.client, namespace, dns.selector),
+			WatchFunc: serviceWatchFunc(dns.client, namespace, dns.selector),
+		},
+		&api.Pod{}, resyncPeriod, framework.ResourceEventHandlerFuncs{})
+
 	dns.nsLister.Store, dns.nsController = framework.NewInformer(
 		&cache.ListWatch{
 			ListFunc:  namespaceListFunc(dns.client, dns.selector),
@@ -72,6 +81,24 @@ func newdnsController(kubeClient *client.Client, resyncPeriod time.Duration, lse
 		&api.Namespace{}, resyncPeriod, framework.ResourceEventHandlerFuncs{})
 
 	return &dns
+}
+
+func podListFunc(c *client.Client, ns string, s *labels.Selector) func(api.ListOptions) (runtime.Object, error) {
+	return func(opts api.ListOptions) (runtime.Object, error) {
+        if s != nil {
+            opts.LabelSelector = *s
+        }
+		return c.Pods(ns).List(opts)
+	}
+}
+
+func podWatchFunc(c *client.Client, ns string, s *labels.Selector) func(options api.ListOptions) (watch.Interface, error) {
+	return func(options api.ListOptions) (watch.Interface, error) {
+        if s != nil {
+            options.LabelSelector = *s
+        }
+		return c.Pods(ns).Watch(options)
+	}
 }
 
 func serviceListFunc(c *client.Client, ns string, s *labels.Selector) func(api.ListOptions) (runtime.Object, error) {
@@ -153,8 +180,9 @@ func (dns *dnsController) Stop() error {
 func (dns *dnsController) Run() {
 	log.Println("[debug] Starting k8s notification controllers")
 
-	go dns.endpController.Run(dns.stopCh)
 	go dns.svcController.Run(dns.stopCh)
+	go dns.podController.Run(dns.stopCh)
+	go dns.endpController.Run(dns.stopCh)
 	go dns.nsController.Run(dns.stopCh)
 
 	<-dns.stopCh
@@ -213,4 +241,23 @@ func (dns *dnsController) GetServiceInNamespace(namespace string, servicename st
 	}
 
 	return svcObj.(*api.Service)
+}
+
+// GetPodInNamespace returns the Pod that matches
+// podname in the namespace
+func (dns *dnsController) GetPodInNamespace(namespace string, podname string) *api.Pod {
+	podKey := fmt.Sprintf("%v/%v", namespace, podname)
+	podObj, podExists, err := dns.podLister.Store.GetByKey(podKey)
+
+	if err != nil {
+		log.Printf("error getting pod %v from the cache: %v\n", podKey, err)
+		return nil
+	}
+
+	if !podExists {
+		log.Printf("pod %v does not exists\n", podKey)
+		return nil
+	}
+
+	return podObj.(*api.Pod)
 }
