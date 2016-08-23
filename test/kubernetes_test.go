@@ -3,12 +3,12 @@
 package test
 
 import (
-	"fmt"
 	"io/ioutil"
 	"log"
 	"testing"
+	"time"
 
-	"github.com/miekg/coredns/middleware/kubernetes/k8stest"
+	"github.com/mholt/caddy"
 	"github.com/miekg/dns"
 )
 
@@ -64,35 +64,46 @@ var testdataLookupSRV = []struct {
 }
 
 func TestK8sIntegration(t *testing.T) {
-	t.Log("   === RUN testLookupA")
+
+	// t.Skip("Skip Kubernetes Integration tests")
+	// subtests here (Go 1.7 feature).
 	testLookupA(t)
-	t.Log("   === RUN testLookupSRV")
 	testLookupSRV(t)
 }
 
-func testLookupA(t *testing.T) {
-	if !k8stest.CheckKubernetesRunning() {
-		t.Skip("Skipping Kubernetes Integration tests. Kubernetes is not running")
+func createTestServer(t *testing.T, corefile string) (*caddy.Instance, string) {
+	server, err := CoreDNSServer(corefile)
+	if err != nil {
+		t.Fatalf("could not get CoreDNS serving instance: %s", err)
 	}
 
-	coreFile :=
+	udp, _ := CoreDNSServerPorts(server, 0)
+	if udp == "" {
+		t.Fatalf("could not get udp listening port")
+	}
+
+	return server, udp
+}
+
+func testLookupA(t *testing.T) {
+	corefile :=
 		`.:0 {
     kubernetes coredns.local {
 		endpoint http://localhost:8080
 		namespaces demo
     }
-`
 
-	server, _, udp, err := Server(t, coreFile)
-	if err != nil {
-		t.Fatal("Could not get server: %s", err)
-	}
+`
+	server, udp := createTestServer(t, corefile)
 	defer server.Stop()
 
 	log.SetOutput(ioutil.Discard)
 
+	// Work-around for timing condition that results in no-data being returned in
+	// test environment.
+	time.Sleep(5 * time.Second)
+
 	for _, testData := range testdataLookupA {
-		t.Logf("[log] Testing query string: '%v'\n", testData.Query)
 		dnsClient := new(dns.Client)
 		dnsMessage := new(dns.Msg)
 
@@ -101,7 +112,7 @@ func testLookupA(t *testing.T) {
 
 		res, _, err := dnsClient.Exchange(dnsMessage, udp)
 		if err != nil {
-			t.Fatal("Could not send query: %s", err)
+			t.Fatalf("Could not send query: %s", err)
 		}
 		// Count A records in the answer section
 		ARecordCount := 0
@@ -121,11 +132,7 @@ func testLookupA(t *testing.T) {
 }
 
 func testLookupSRV(t *testing.T) {
-	if !k8stest.CheckKubernetesRunning() {
-		t.Skip("Skipping Kubernetes Integration tests. Kubernetes is not running")
-	}
-
-	coreFile :=
+	corefile :=
 		`.:0 {
     kubernetes coredns.local {
 		endpoint http://localhost:8080
@@ -133,18 +140,18 @@ func testLookupSRV(t *testing.T) {
     }
 `
 
-	server, _, udp, err := Server(t, coreFile)
-	if err != nil {
-		t.Fatal("Could not get server: %s", err)
-	}
+	server, udp := createTestServer(t, corefile)
 	defer server.Stop()
 
 	log.SetOutput(ioutil.Discard)
 
+	// Work-around for timing condition that results in no-data being returned in
+	// test environment.
+	time.Sleep(5 * time.Second)
+
 	// TODO: Add checks for A records in additional section
 
 	for _, testData := range testdataLookupSRV {
-		t.Logf("[log] Testing query string: '%v'\n", testData.Query)
 		dnsClient := new(dns.Client)
 		dnsMessage := new(dns.Msg)
 
@@ -153,12 +160,11 @@ func testLookupSRV(t *testing.T) {
 
 		res, _, err := dnsClient.Exchange(dnsMessage, udp)
 		if err != nil {
-			t.Fatal("Could not send query: %s", err)
+			t.Fatalf("Could not send query: %s", err)
 		}
 		// Count SRV records in the answer section
 		srvRecordCount := 0
 		for _, a := range res.Answer {
-			fmt.Printf("RR: %v\n", a)
 			if a.Header().Rrtype == dns.TypeSRV {
 				srvRecordCount++
 			}

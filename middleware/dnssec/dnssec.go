@@ -4,21 +4,22 @@ import (
 	"time"
 
 	"github.com/miekg/coredns/middleware"
-	"github.com/miekg/coredns/middleware/singleflight"
+	"github.com/miekg/coredns/singleflight"
 
 	"github.com/miekg/dns"
 	gcache "github.com/patrickmn/go-cache"
 )
 
 type Dnssec struct {
-	Next     middleware.Handler
+	Next middleware.Handler
+
 	zones    []string
 	keys     []*DNSKEY
 	inflight *singleflight.Group
 	cache    *gcache.Cache
 }
 
-func NewDnssec(zones []string, keys []*DNSKEY, next middleware.Handler) Dnssec {
+func New(zones []string, keys []*DNSKEY, next middleware.Handler) Dnssec {
 	return Dnssec{Next: next,
 		zones:    zones,
 		keys:     keys,

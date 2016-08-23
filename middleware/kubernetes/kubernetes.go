@@ -16,10 +16,10 @@ import (
 	"github.com/miekg/dns"
 	"k8s.io/kubernetes/pkg/api"
 	unversionedapi "k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/labels"
 	unversionedclient "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
+	"k8s.io/kubernetes/pkg/labels"
 )
 
 type Kubernetes struct {
@@ -32,21 +32,20 @@ type Kubernetes struct {
 	NameTemplate  *nametemplate.NameTemplate
 	Namespaces    []string
 	LabelSelector *unversionedapi.LabelSelector
-	Selector      *labels.Selector 
+	Selector      *labels.Selector
 }
 
-func (g *Kubernetes) StartKubeCache() error {
+func (k *Kubernetes) InitKubeCache() error {
 	// For a custom api server or running outside a k8s cluster
 	// set URL in env.KUBERNETES_MASTER or set endpoint in Corefile
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
-	if len(g.APIEndpoint) > 0 {
-		overrides.ClusterInfo = clientcmdapi.Cluster{Server: g.APIEndpoint}
+	if len(k.APIEndpoint) > 0 {
+		overrides.ClusterInfo = clientcmdapi.Cluster{Server: k.APIEndpoint}
 	}
 	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
 	config, err := clientConfig.ClientConfig()
 	if err != nil {
-		log.Printf("[debug] error connecting to the client: %v", err)
 		return err
 	}
 	kubeClient, err := unversionedclient.New(config)
@@ -55,22 +54,21 @@ func (g *Kubernetes) StartKubeCache() error {
 		log.Printf("[ERROR] Failed to create kubernetes notification controller: %v", err)
 		return err
 	}
-	if g.LabelSelector == nil {
+	if k.LabelSelector == nil {
 		log.Printf("[INFO] Kubernetes middleware configured without a label selector. No label-based filtering will be performed.")
 	} else {
-        var selector labels.Selector
-		selector, err = unversionedapi.LabelSelectorAsSelector(g.LabelSelector)
-        g.Selector = &selector
-        if err != nil {
-            log.Printf("[ERROR] Unable to create Selector for LabelSelector '%s'.Error was: %s", g.LabelSelector, err)
-            return err
-        }
-		log.Printf("[INFO] Kubernetes middleware configured with the label selector '%s'. Only kubernetes objects matching this label selector will be exposed.", unversionedapi.FormatLabelSelector(g.LabelSelector))
+		var selector labels.Selector
+		selector, err = unversionedapi.LabelSelectorAsSelector(k.LabelSelector)
+		k.Selector = &selector
+		if err != nil {
+			log.Printf("[ERROR] Unable to create Selector for LabelSelector '%s'.Error was: %s", k.LabelSelector, err)
+			return err
+		}
+		log.Printf("[INFO] Kubernetes middleware configured with the label selector '%s'. Only kubernetes objects matching this label selector will be exposed.", unversionedapi.FormatLabelSelector(k.LabelSelector))
 	}
-	log.Printf("[debug] Starting kubernetes middleware with k8s API resync period: %s", g.ResyncPeriod)
-	g.APIConn = newdnsController(kubeClient, g.ResyncPeriod, g.Selector)
+	k.APIConn = newdnsController(kubeClient, k.ResyncPeriod, k.Selector)
 
-	go g.APIConn.Run()
+	log.Printf("[debug] k8s controller initialized: %s\n", k)
 
 	return err
 }
@@ -80,11 +78,11 @@ func (g *Kubernetes) StartKubeCache() error {
 // For example, if "coredns.local" is a zone configured for the
 // Kubernetes middleware, then getZoneForName("a.b.coredns.local")
 // will return ("coredns.local", ["a", "b"]).
-func (g *Kubernetes) getZoneForName(name string) (string, []string) {
+func (k *Kubernetes) getZoneForName(name string) (string, []string) {
 	var zone string
 	var serviceSegments []string
 
-	for _, z := range g.Zones {
+	for _, z := range k.Zones {
 		if dns.IsSubDomain(z, name) {
 			zone = z
 
@@ -101,12 +99,12 @@ func (g *Kubernetes) getZoneForName(name string) (string, []string) {
 // If exact is true, it will lookup just
 // this name. This is used when find matches when completing SRV lookups
 // for instance.
-func (g *Kubernetes) Records(name string, exact bool) ([]msg.Service, error) {
+func (k *Kubernetes) Records(name string, exact bool) ([]msg.Service, error) {
 	// TODO: refector this.
 	// Right now GetNamespaceFromSegmentArray do not supports PRE queries
 	if strings.HasSuffix(name, arpaSuffix) {
 		ip, _ := extractIP(name)
-		records := g.getServiceRecordForIP(ip, name)
+		records := k.getServiceRecordForIP(ip, name)
 		return records, nil
 	}
 	var (
@@ -115,15 +113,14 @@ func (g *Kubernetes) Records(name string, exact bool) ([]msg.Service, error) {
 		typeName    string
 	)
 
-	log.Printf("[debug] enter Records('%v', '%v')\n", name, exact)
-	zone, serviceSegments := g.getZoneForName(name)
+	zone, serviceSegments := k.getZoneForName(name)
 
 	// TODO: Implementation above globbed together segments for the serviceName if
 	//       multiple segments remained. Determine how to do similar globbing using
 	//		 the template-based implementation.
-	namespace = g.NameTemplate.GetNamespaceFromSegmentArray(serviceSegments)
-	serviceName = g.NameTemplate.GetServiceFromSegmentArray(serviceSegments)
-	typeName = g.NameTemplate.GetTypeFromSegmentArray(serviceSegments)
+	namespace = k.NameTemplate.GetNamespaceFromSegmentArray(serviceSegments)
+	serviceName = k.NameTemplate.GetServiceFromSegmentArray(serviceSegments)
+	typeName = k.NameTemplate.GetTypeFromSegmentArray(serviceSegments)
 
 	if namespace == "" {
 		err := errors.New("Parsing query string did not produce a namespace value. Assuming wildcard namespace.")
@@ -137,30 +134,17 @@ func (g *Kubernetes) Records(name string, exact bool) ([]msg.Service, error) {
 		serviceName = util.WildcardStar
 	}
 
-	log.Printf("[debug] published namespaces: %v\n", g.Namespaces)
-
-	log.Printf("[debug] exact: %v\n", exact)
-	log.Printf("[debug] zone: %v\n", zone)
-	log.Printf("[debug] servicename: %v\n", serviceName)
-	log.Printf("[debug] namespace: %v\n", namespace)
-	log.Printf("[debug] typeName: %v\n", typeName)
-	log.Printf("[debug] APIconn: %v\n", g.APIConn)
-
 	nsWildcard := util.SymbolContainsWildcard(namespace)
 	serviceWildcard := util.SymbolContainsWildcard(serviceName)
 
 	// Abort if the namespace does not contain a wildcard, and namespace is not published per CoreFile
 	// Case where namespace contains a wildcard is handled in Get(...) method.
-	if (!nsWildcard) && (len(g.Namespaces) > 0) && (!util.StringInSlice(namespace, g.Namespaces)) {
-		log.Printf("[debug] Namespace '%v' is not published by Corefile\n", namespace)
+	if (!nsWildcard) && (len(k.Namespaces) > 0) && (!util.StringInSlice(namespace, k.Namespaces)) {
 		return nil, nil
 	}
 
-	log.Printf("before g.Get(namespace, nsWildcard, serviceName, serviceWildcard): %v %v %v %v", namespace, nsWildcard, serviceName, serviceWildcard)
-	k8sItems, err := g.Get(namespace, nsWildcard, serviceName, serviceWildcard)
-	log.Printf("[debug] k8s items: %v\n", k8sItems)
+	k8sItems, err := k.Get(namespace, nsWildcard, serviceName, serviceWildcard)
 	if err != nil {
-		log.Printf("[ERROR] Got error while looking up ServiceItems. Error is: %v\n", err)
 		return nil, err
 	}
 	if k8sItems == nil {
@@ -168,17 +152,16 @@ func (g *Kubernetes) Records(name string, exact bool) ([]msg.Service, error) {
 		return nil, nil
 	}
 
-	records := g.getRecordsForServiceItems(k8sItems, nametemplate.NameValues{TypeName: typeName, ServiceName: serviceName, Namespace: namespace, Zone: zone})
+	records := k.getRecordsForServiceItems(k8sItems, nametemplate.NameValues{TypeName: typeName, ServiceName: serviceName, Namespace: namespace, Zone: zone})
 	return records, nil
 }
 
 // TODO: assemble name from parts found in k8s data based on name template rather than reusing query string
-func (g *Kubernetes) getRecordsForServiceItems(serviceItems []api.Service, values nametemplate.NameValues) []msg.Service {
+func (k *Kubernetes) getRecordsForServiceItems(serviceItems []api.Service, values nametemplate.NameValues) []msg.Service {
 	var records []msg.Service
 
 	for _, item := range serviceItems {
 		clusterIP := item.Spec.ClusterIP
-		log.Printf("[debug] clusterIP: %v\n", clusterIP)
 
 		// Create records by constructing record name from template...
 		//values.Namespace = item.Metadata.Namespace
@@ -188,26 +171,17 @@ func (g *Kubernetes) getRecordsForServiceItems(serviceItems []api.Service, value
 
 		// Create records for each exposed port...
 		for _, p := range item.Spec.Ports {
-			log.Printf("[debug]    port: %v\n", p.Port)
 			s := msg.Service{Host: clusterIP, Port: int(p.Port)}
 			records = append(records, s)
 		}
 	}
 
-	log.Printf("[debug] records from getRecordsForServiceItems(): %v\n", records)
 	return records
 }
 
 // Get performs the call to the Kubernetes http API.
-func (g *Kubernetes) Get(namespace string, nsWildcard bool, servicename string, serviceWildcard bool) ([]api.Service, error) {
-	serviceList := g.APIConn.GetServiceList()
-
-	/* TODO: Remove?
-	if err != nil {
-		log.Printf("[ERROR] Getting service list produced error: %v", err)
-		return nil, err
-	}
-	*/
+func (k *Kubernetes) Get(namespace string, nsWildcard bool, servicename string, serviceWildcard bool) ([]api.Service, error) {
+	serviceList := k.APIConn.GetServiceList()
 
 	var resultItems []api.Service
 
@@ -215,8 +189,7 @@ func (g *Kubernetes) Get(namespace string, nsWildcard bool, servicename string, 
 		if symbolMatches(namespace, item.Namespace, nsWildcard) && symbolMatches(servicename, item.Name, serviceWildcard) {
 			// If namespace has a wildcard, filter results against Corefile namespace list.
 			// (Namespaces without a wildcard were filtered before the call to this function.)
-			if nsWildcard && (len(g.Namespaces) > 0) && (!util.StringInSlice(item.Namespace, g.Namespaces)) {
-				log.Printf("[debug] Namespace '%v' is not published by Corefile\n", item.Namespace)
+			if nsWildcard && (len(k.Namespaces) > 0) && (!util.StringInSlice(item.Namespace, k.Namespaces)) {
 				continue
 			}
 			resultItems = append(resultItems, item)
@@ -244,8 +217,8 @@ func isKubernetesNameError(err error) bool {
 	return false
 }
 
-func (g *Kubernetes) getServiceRecordForIP(ip, name string) []msg.Service {
-	svcList, err := g.APIConn.svcLister.List()
+func (k *Kubernetes) getServiceRecordForIP(ip, name string) []msg.Service {
+	svcList, err := k.APIConn.svcLister.List()
 	if err != nil {
 		return nil
 	}
