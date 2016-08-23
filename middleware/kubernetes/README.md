@@ -274,24 +274,12 @@ TBD:
 		  would need to know the IP/port in order to create the query to lookup
 		  the name. Presumably these are intended for wildcard queries.
 	* Performance
+        * Automate performance test cases.
 		* Improve lookup to reduce size of query result obtained from k8s API.
 		  (namespace-based?, other ideas?)
 * Additional features:
 	* Reverse IN-ADDR entries for services. (Is there any value in supporting 
 	  reverse lookup records?) (need tests, functionality should work based on @aledbf's code.)
-	* (done) ~~How to support label specification in Corefile to allow use of labels to 
-	  indicate zone? For example, the following
-	  configuration exposes all services labeled for the "staging" environment
-	  and tenant "customerB" in the zone "customerB.stage.local":
-
-			kubernetes customerB.stage.local {
-				# Use url for k8s API endpoint
-				endpoint http://localhost:8080
-				labels environment in (staging),tenant=customerB
-			}
-
-	  Note: label specification/selection is a killer feature for segmenting
-	  test vs staging vs prod environments.~~ Need label testing.
 	* Implement IP selection and ordering (internal/external). Related to
 	  wildcards and SkyDNS use of CNAMES.
 	* Flatten service and namespace names to valid DNS characters. (service names
