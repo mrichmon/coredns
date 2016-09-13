@@ -294,6 +294,7 @@ TBD:
 		  would need to know the IP/port in order to create the query to lookup
 		  the name. Presumably these are intended for wildcard queries.
 	* Performance
+        * Automate performance test cases.
 		* Improve lookup to reduce size of query result obtained from k8s API.
 		  (namespace-based?, other ideas?)
 * Additional features:
@@ -311,7 +312,8 @@ TBD:
 			}
 
 	  Note: label specification/selection is a killer feature for segmenting
-	  test vs staging vs prod environments.~~ Need label testing.
+	  test vs staging vs prod environments.~~
+    * Implement test cases for label support.
 	* Implement IP selection and ordering (internal/external). Related to
 	  wildcards and SkyDNS use of CNAMES.
 	* Flatten service and namespace names to valid DNS characters. (service names
